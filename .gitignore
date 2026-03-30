@@ -1,0 +1,6 @@
+build/
+optimised/
+test-reports/
+*.class
+.DS_Store
+.vscode/
