@@ -3,8 +3,10 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.Iterator;
+import java.util.HashMap;
+import java.util.Map;
 
+import org.apache.bcel.classfile.Attribute;
 import org.apache.bcel.classfile.ClassParser;
 import org.apache.bcel.classfile.Code;
 import org.apache.bcel.classfile.JavaClass;
@@ -13,32 +15,30 @@ import org.apache.bcel.generic.ClassGen;
 import org.apache.bcel.generic.ConstantPoolGen;
 import org.apache.bcel.generic.InstructionHandle;
 import org.apache.bcel.generic.InstructionList;
-import org.apache.bcel.util.InstructionFinder;
 import org.apache.bcel.generic.MethodGen;
 import org.apache.bcel.generic.TargetLostException;
 import org.apache.bcel.generic.Instruction;
 import org.apache.bcel.generic.ConstantPushInstruction;
+import org.apache.bcel.generic.InstructionTargeter;
 import org.apache.bcel.generic.LDC;
 import org.apache.bcel.generic.LDC2_W;
 import org.apache.bcel.generic.ArithmeticInstruction;
+import org.apache.bcel.generic.StoreInstruction;
+import org.apache.bcel.generic.LoadInstruction;
+import org.apache.bcel.generic.IINC;
 //optimisation for the maths 
-import org.apache.bcel.generic.PUSH;
-
 import org.apache.bcel.generic.IADD;
 import org.apache.bcel.generic.ISUB;
 import org.apache.bcel.generic.IMUL;
 import org.apache.bcel.generic.IDIV;
-
 import org.apache.bcel.generic.LADD;
 import org.apache.bcel.generic.LSUB;
 import org.apache.bcel.generic.LMUL;
 import org.apache.bcel.generic.LDIV;
-
 import org.apache.bcel.generic.FADD;
 import org.apache.bcel.generic.FSUB;
 import org.apache.bcel.generic.FMUL;
 import org.apache.bcel.generic.FDIV;
-
 import org.apache.bcel.generic.DADD;
 import org.apache.bcel.generic.DSUB;
 import org.apache.bcel.generic.DMUL;
@@ -68,6 +68,7 @@ public class ConstantFolder
 	public void optimize()
 	{
 		ClassGen cgen = new ClassGen(original);
+		cgen.setMajor(50);
 		ConstantPoolGen cpgen = cgen.getConstantPool();
 
 		Method[] methods = cgen.getMethods(); //load all methods in the class
@@ -86,12 +87,18 @@ public class ConstantFolder
 				continue;
 			} //ignore methods with no code inside
 
-			// Task 1
+			// Main optimization loop
+			// Task 1 and 2 are executed alternately within a single loop
+			// Repeat each pass until no further changes occur
 			boolean changed = true;
 
 			while (changed) {
 				changed = false;
 
+				Map<Integer, Number> constantVariables = buildConstantVariableMap(il, cpgen);
+
+
+				// Task 1: Simple Constant Folding
 				for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()) {
 					InstructionHandle next1 = ih.getNext();
 					if (next1 == null) {
@@ -110,41 +117,71 @@ public class ConstantFolder
 					Number value1 = getConstantValue(instr1, cpgen);
 					Number value2 = getConstantValue(instr2, cpgen);
 
-					if (value1 != null && value2 != null && instr3 instanceof ArithmeticInstruction) {
-						Number result = foldOperation(value1, value2, instr3);
+					if (value1 == null || value2 == null) continue;
+                    if (!(instr3 instanceof ArithmeticInstruction)) continue;
 
-						if (result != null) {
-							try {
-								InstructionList newInstructions = new InstructionList();
+					Number result = foldOperation(value1, value2, instr3);
+					if (result == null) continue;
 
-								if (result instanceof Integer) {
-									newInstructions.append(new PUSH(cpgen, result.intValue()));
-								} else if (result instanceof Long) {
-									newInstructions.append(new PUSH(cpgen, result.longValue()));
-								} else if (result instanceof Float) {
-									newInstructions.append(new PUSH(cpgen, result.floatValue()));
-								} else if (result instanceof Double) {
-									newInstructions.append(new PUSH(cpgen, result.doubleValue()));
-								} else {
-									continue;
-								}
+					// Create a new constant push instruction
+					Instruction newInstr = buildPush(cpgen, result);
+					if (newInstr == null) continue;
 
-								il.insert(ih, newInstructions);
-								il.delete(ih, next2);
+					// 1. Overwrite the original instruction at ih with setInstruction -> any branches targeting ih remain intact
+					// 2. next1 and next2 instructions (operand push + operator) are no longer needed, 
+					// so use redirectBranches to move each branch target to the instruction after next2, then delete them -> can be deleted without causing a TargetLostException
+					ih.setInstruction(newInstr);
 
-								System.out.println("REPLACED: " + value1 + " and " + value2
-										+ " using " + instr3 + " with " + result);
-
-								changed = true;
-								break;
-							} catch (TargetLostException e) {
-								e.printStackTrace();
-							}
-						}
-					}
+					try{
+						
+						il.delete(next1,next2);
+					} catch (TargetLostException e) {
+						// Since redirectBranches has already been done, should not reach this point.
+						// If reach here, do not ignore it instead, redirect the targets to ih
+						for (InstructionHandle lostTarget : e.getTargets()) {
+                            InstructionTargeter[] targeters = lostTarget.getTargeters();
+                            if (targeters != null) {
+                                for (InstructionTargeter targeter : targeters) {
+                                    targeter.updateTarget(lostTarget, ih);
+                                }
+                            }
+                        }
+                    }
+					System.out.println("[Task1] FOLDED: " + value1 + " op " + value2 + " ("+ instr3 + ") ->" + result);
+					changed = true;
+					break;
 				}
-			}
+				if (changed) continue;
+					// Task 2: Constant Variable Propagation
+					// Replace the instruction that loads a constant variable with an actual constant push
+					// Using setInstruction ensures the safety of jump targets (If the LoadInstruction is a branch target, it remains intact)
+					for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()){
+						if (!(ih.getInstruction() instanceof LoadInstruction)) continue;
 
+						int index = ((LoadInstruction) ih.getInstruction()).getIndex();
+						if (!constantVariables.containsKey(index)) continue;
+
+						Number constVal = constantVariables.get(index);
+						Instruction newInstr = buildPush(cpgen, constVal);
+						if (newInstr == null) continue;
+
+						ih.setInstruction(newInstr);
+						System.out.println("[Task2] PROPAGATED: iload/lload/fload/dload var# " + index + " ->" + constVal);
+						changed = true;
+						break;
+					}
+					
+				
+			}
+			mg.removeLocalVariables();
+            mg.removeLineNumbers();
+
+			for (Attribute a : mg.getCodeAttributes()) {
+                if (a.getClass().getSimpleName().contains("StackMap")) {
+                    mg.removeCodeAttribute(a);
+                }
+            }
+			il.setPositions(true);
 			mg.setMaxStack(); //change the method calc stack size
 			mg.setMaxLocals(); //change the method calc # of vars 
 			cgen.replaceMethod(method, mg.getMethod()); //update the methods in the class
@@ -152,7 +189,55 @@ public class ConstantFolder
 
 		this.optimized = cgen.getJavaClass(); //cgen is the edited class we are working on
 	}
+	// Task 2 Preprocessing Method
+	// 1. Scan all instructions and count the number of stores for each variable index.
+	// 2. For variables stored exactly once, check if the instruction immediately preceding the store is a constant push. If so, register it in constantVariables.
+	private Map<Integer, Number> buildConstantVariableMap(InstructionList il, ConstantPoolGen cpgen)
+	{
+		// 1. count the number of stores
+		Map<Integer, Integer> storeCounts = new HashMap<>();
+		for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()){
+			Instruction instr = ih.getInstruction();
+			if(instr instanceof StoreInstruction) {
+				int idx = ((StoreInstruction) instr).getIndex();
+				storeCounts.put(idx, storeCounts.getOrDefault(idx,0) + 1);
+			}else if (instr instanceof IINC) {
+				int idx = ((IINC) instr).getIndex();
+				storeCounts.put(idx, storeCounts.getOrDefault(idx, 0) + 1);
+			}
+		}
 
+		// 2. Extract constantvariables stored exactly once
+		Map<Integer, Number> constantVariables = new HashMap<>();
+		for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()){
+			if (!(ih.getInstruction() instanceof StoreInstruction)) continue;
+
+			int idx = ((StoreInstruction) ih.getInstruction()).getIndex();
+
+			// Prevent Integer object comparison bug; use .intValue()
+			if (storeCounts.get(idx).intValue() != 1) continue;
+
+			InstructionHandle prev = ih.getPrev();
+			if (prev == null) continue;
+
+			Number constVal = getConstantValue(prev.getInstruction(), cpgen);
+			if (constVal == null) continue;
+
+			constantVariables.put(idx, constVal);
+		}
+
+		return constantVariables;
+	}
+	// Common helper - return the appropriate PUSH instruction for the Number type
+	private Instruction buildPush(ConstantPoolGen cpgen, Number value) {
+		InstructionList tmp = new InstructionList();
+        if (value instanceof Integer) tmp.append(new org.apache.bcel.generic.PUSH(cpgen, value.intValue()));
+        else if (value instanceof Long) tmp.append(new org.apache.bcel.generic.PUSH(cpgen, value.longValue()));
+        else if (value instanceof Float) tmp.append(new org.apache.bcel.generic.PUSH(cpgen, value.floatValue()));
+        else if (value instanceof Double) tmp.append(new org.apache.bcel.generic.PUSH(cpgen, value.doubleValue()));
+        else return null;
+        return tmp.getStart().getInstruction();
+    }
     //Check if this instruction is pushing a number. If yes, return the number. If not, return null.
 	private Number getConstantValue(Instruction instruction, ConstantPoolGen cpgen) {
 		if (instruction instanceof ConstantPushInstruction) {
