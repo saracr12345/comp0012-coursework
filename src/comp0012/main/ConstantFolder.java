@@ -5,6 +5,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.apache.bcel.classfile.Attribute;
 import org.apache.bcel.classfile.ClassParser;
@@ -43,6 +45,9 @@ import org.apache.bcel.generic.DADD;
 import org.apache.bcel.generic.DSUB;
 import org.apache.bcel.generic.DMUL;
 import org.apache.bcel.generic.DDIV;
+import org.apache.bcel.generic.BranchInstruction;
+import org.apache.bcel.generic.ReturnInstruction;
+import org.apache.bcel.generic.Select;
 
 
 public class ConstantFolder
@@ -170,7 +175,13 @@ public class ConstantFolder
 						changed = true;
 						break;
 					}
-					
+				
+					if (changed) continue;
+
+					// Task 3: Dynamic Variable Propagation
+					if (propagateDynamicConstants(il, cpgen)) {
+						changed = true;
+					}
 				
 			}
 			mg.removeLocalVariables();
@@ -189,6 +200,100 @@ public class ConstantFolder
 
 		this.optimized = cgen.getJavaClass(); //cgen is the edited class we are working on
 	}
+
+	// Task 3: Dynamic variable propagation
+	// Track the currently-known constant for each local variable slot inside straight-line code.
+	// Clear the map at control-flow join points / block boundaries to stay conservative.
+	private boolean propagateDynamicConstants(InstructionList il, ConstantPoolGen cpgen) {
+		Map<Integer, Number> currentConstants = new HashMap<>();
+		Set<InstructionHandle> branchTargets = collectBranchTargets(il);
+
+		for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()) {
+
+			// Start of a new basic block: forget previous assumptions
+			if (ih != il.getStart() && branchTargets.contains(ih)) {
+				currentConstants.clear();
+			}
+
+			// If the previous instruction ended control flow, also clear
+			InstructionHandle prevHandle = ih.getPrev();
+			if (prevHandle != null) {
+				Instruction prevInstr = prevHandle.getInstruction();
+				if (prevInstr instanceof BranchInstruction || prevInstr instanceof ReturnInstruction) {
+					currentConstants.clear();
+				}
+			}
+
+			Instruction instr = ih.getInstruction();
+
+			// If we load a variable whose current value is known, replace the load with a constant push
+			if (instr instanceof LoadInstruction) {
+				int idx = ((LoadInstruction) instr).getIndex();
+				if (currentConstants.containsKey(idx)) {
+					Number constVal = currentConstants.get(idx);
+					Instruction newInstr = buildPush(cpgen, constVal);
+					if (newInstr != null) {
+						ih.setInstruction(newInstr);
+						System.out.println("[Task3] DYNAMIC PROPAGATED: var# " + idx + " -> " + constVal);
+						return true;
+					}
+				}
+			}
+
+			// Record constant assignments
+			if (instr instanceof StoreInstruction) {
+				int idx = ((StoreInstruction) instr).getIndex();
+				InstructionHandle prev = ih.getPrev();
+				Number constVal = null;
+
+				if (prev != null) {
+					constVal = getConstantValue(prev.getInstruction(), cpgen);
+				}
+
+				if (constVal != null) {
+					currentConstants.put(idx, constVal);
+				} else {
+					currentConstants.remove(idx);
+				}
+				continue;
+			}
+
+			// Handle iinc specially: update tracked integer constant if known
+			if (instr instanceof IINC) {
+				int idx = ((IINC) instr).getIndex();
+				if (currentConstants.containsKey(idx)) {
+					Number oldValue = currentConstants.get(idx);
+					currentConstants.put(idx, oldValue.intValue() + ((IINC) instr).getIncrement());
+				} else {
+					currentConstants.remove(idx);
+				}
+			}
+		}
+
+		return false;
+	}
+
+	private Set<InstructionHandle> collectBranchTargets(InstructionList il) {
+		Set<InstructionHandle> targets = new HashSet<>();
+
+		for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()) {
+			Instruction instr = ih.getInstruction();
+
+			if (instr instanceof BranchInstruction) {
+				BranchInstruction branch = (BranchInstruction) instr;
+				targets.add(branch.getTarget());
+
+				if (branch instanceof Select) {
+					for (InstructionHandle target : ((Select) branch).getTargets()) {
+						targets.add(target);
+					}
+				}
+			}
+		}
+
+		return targets;
+	}
+
 	// Task 2 Preprocessing Method
 	// 1. Scan all instructions and count the number of stores for each variable index.
 	// 2. For variables stored exactly once, check if the instruction immediately preceding the store is a constant push. If so, register it in constantVariables.
