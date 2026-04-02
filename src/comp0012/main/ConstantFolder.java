@@ -13,57 +13,7 @@ import org.apache.bcel.classfile.ClassParser;
 import org.apache.bcel.classfile.Code;
 import org.apache.bcel.classfile.JavaClass;
 import org.apache.bcel.classfile.Method;
-import org.apache.bcel.generic.ClassGen;
-import org.apache.bcel.generic.ConstantPoolGen;
-import org.apache.bcel.generic.InstructionHandle;
-import org.apache.bcel.generic.InstructionList;
-import org.apache.bcel.generic.MethodGen;
-import org.apache.bcel.generic.TargetLostException;
-import org.apache.bcel.generic.Instruction;
-import org.apache.bcel.generic.ConstantPushInstruction;
-import org.apache.bcel.generic.InstructionTargeter;
-import org.apache.bcel.generic.LDC;
-import org.apache.bcel.generic.LDC2_W;
-import org.apache.bcel.generic.ArithmeticInstruction;
-import org.apache.bcel.generic.StoreInstruction;
-import org.apache.bcel.generic.LoadInstruction;
-import org.apache.bcel.generic.IINC;
-//optimisation for the maths 
-import org.apache.bcel.generic.IADD;
-import org.apache.bcel.generic.ISUB;
-import org.apache.bcel.generic.IMUL;
-import org.apache.bcel.generic.IDIV;
-import org.apache.bcel.generic.LADD;
-import org.apache.bcel.generic.LSUB;
-import org.apache.bcel.generic.LMUL;
-import org.apache.bcel.generic.LDIV;
-import org.apache.bcel.generic.FADD;
-import org.apache.bcel.generic.FSUB;
-import org.apache.bcel.generic.FMUL;
-import org.apache.bcel.generic.FDIV;
-import org.apache.bcel.generic.DADD;
-import org.apache.bcel.generic.DSUB;
-import org.apache.bcel.generic.DMUL;
-import org.apache.bcel.generic.DDIV;
-import org.apache.bcel.generic.BranchInstruction;
-import org.apache.bcel.generic.ReturnInstruction;
-import org.apache.bcel.generic.Select;
-
-import org.apache.bcel.generic.GOTO;
-import org.apache.bcel.generic.IfInstruction;
-import org.apache.bcel.generic.IFEQ;
-import org.apache.bcel.generic.IFNE;
-import org.apache.bcel.generic.IFLT;
-import org.apache.bcel.generic.IFLE;
-import org.apache.bcel.generic.IFGT;
-import org.apache.bcel.generic.IFGE;
-import org.apache.bcel.generic.IF_ICMPEQ;
-import org.apache.bcel.generic.IF_ICMPNE;
-import org.apache.bcel.generic.IF_ICMPLT;
-import org.apache.bcel.generic.IF_ICMPLE;
-import org.apache.bcel.generic.IF_ICMPGT;
-import org.apache.bcel.generic.IF_ICMPGE;
-import org.apache.bcel.generic.NOP;
+import org.apache.bcel.generic.*;
 
 public class ConstantFolder
 {
