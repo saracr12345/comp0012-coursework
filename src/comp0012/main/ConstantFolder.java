@@ -49,6 +49,21 @@ import org.apache.bcel.generic.BranchInstruction;
 import org.apache.bcel.generic.ReturnInstruction;
 import org.apache.bcel.generic.Select;
 
+import org.apache.bcel.generic.GOTO;
+import org.apache.bcel.generic.IfInstruction;
+import org.apache.bcel.generic.IFEQ;
+import org.apache.bcel.generic.IFNE;
+import org.apache.bcel.generic.IFLT;
+import org.apache.bcel.generic.IFLE;
+import org.apache.bcel.generic.IFGT;
+import org.apache.bcel.generic.IFGE;
+import org.apache.bcel.generic.IF_ICMPEQ;
+import org.apache.bcel.generic.IF_ICMPNE;
+import org.apache.bcel.generic.IF_ICMPLT;
+import org.apache.bcel.generic.IF_ICMPLE;
+import org.apache.bcel.generic.IF_ICMPGT;
+import org.apache.bcel.generic.IF_ICMPGE;
+import org.apache.bcel.generic.NOP;
 
 public class ConstantFolder
 {
@@ -176,11 +191,18 @@ public class ConstantFolder
 						break;
 					}
 				
-					if (changed) continue;
+				if (changed) continue;
 
 					// Task 3: Dynamic Variable Propagation
 					if (propagateDynamicConstants(il, cpgen)) {
 						changed = true;
+						continue;
+					}
+
+					// Task 4: Constant conditional branch folding
+					if (foldConstantBranches(il, cpgen)) {
+						changed = true;
+						continue;
 					}
 				
 			}
@@ -333,6 +355,118 @@ public class ConstantFolder
 
 		return constantVariables;
 	}
+
+
+	private boolean foldConstantBranches(InstructionList il, ConstantPoolGen cpgen) {
+		for (InstructionHandle ih = il.getStart(); ih != null; ih = ih.getNext()) {
+			Instruction instr1 = ih.getInstruction();
+
+			// Case 1: unary branch
+			// Pattern: CONST, IFxx
+			InstructionHandle next1 = ih.getNext();
+			if (next1 != null) {
+				Instruction instr2 = next1.getInstruction();
+
+				if (instr2 instanceof IFEQ
+						|| instr2 instanceof IFNE
+						|| instr2 instanceof IFLT
+						|| instr2 instanceof IFLE
+						|| instr2 instanceof IFGT
+						|| instr2 instanceof IFGE) {
+
+					Number value = getConstantValue(instr1, cpgen);
+					if (value != null) {
+						Boolean taken = evaluateUnaryBranch(value, (IfInstruction) instr2);
+						if (taken != null) {
+							// constant push is no longer needed
+							ih.setInstruction(new NOP());
+
+							InstructionHandle fallthrough = next1.getNext();
+							if (fallthrough == null) continue;
+
+							if (taken) {
+								next1.setInstruction(new GOTO(((IfInstruction) instr2).getTarget()));
+							} else {
+								next1.setInstruction(new GOTO(fallthrough));
+							}
+
+							System.out.println("[Task4] FOLDED UNARY BRANCH: " + value + " (" + instr2 + ") -> "
+									+ (taken ? "taken" : "not taken"));
+							return true;
+						}
+					}
+				}
+			}
+
+			// Case 2: binary integer compare
+			// Pattern: CONST, CONST, IF_ICMPxx
+			if (next1 == null) continue;
+			InstructionHandle next2 = next1.getNext();
+			if (next2 == null) continue;
+
+			Instruction instr2 = next1.getInstruction();
+			Instruction instr3 = next2.getInstruction();
+
+			Number value1 = getConstantValue(instr1, cpgen);
+			Number value2 = getConstantValue(instr2, cpgen);
+
+			if (value1 == null || value2 == null) continue;
+
+			Boolean taken = evaluateBinaryBranch(value1, value2, instr3);
+			if (taken == null) continue;
+
+			// constant pushes are no longer needed
+			ih.setInstruction(new NOP());
+			next1.setInstruction(new NOP());
+
+			InstructionHandle fallthrough = next2.getNext();
+			if (fallthrough == null) continue;
+
+			if (taken) {
+				next2.setInstruction(new GOTO(((IfInstruction) instr3).getTarget()));
+			} else {
+				next2.setInstruction(new GOTO(fallthrough));
+			}
+
+			System.out.println("[Task4] FOLDED BINARY BRANCH: " + value1 + " ? " + value2 + " (" + instr3 + ") -> "
+					+ (taken ? "taken" : "not taken"));
+			return true;
+		}
+
+		return false;
+	}
+	
+
+	private Boolean evaluateUnaryBranch(Number value, IfInstruction branch) {
+		int v = value.intValue();
+
+		if (branch instanceof IFEQ) return v == 0;
+		if (branch instanceof IFNE) return v != 0;
+		if (branch instanceof IFLT) return v < 0;
+		if (branch instanceof IFLE) return v <= 0;
+		if (branch instanceof IFGT) return v > 0;
+		if (branch instanceof IFGE) return v >= 0;
+
+		return null;
+	}
+
+	private Boolean evaluateBinaryBranch(Number value1, Number value2, Instruction instruction) {
+		if (!(instruction instanceof IfInstruction)) return null;
+
+		int a = value1.intValue();
+		int b = value2.intValue();
+
+		if (instruction instanceof IF_ICMPEQ) return a == b;
+		if (instruction instanceof IF_ICMPNE) return a != b;
+		if (instruction instanceof IF_ICMPLT) return a < b;
+		if (instruction instanceof IF_ICMPLE) return a <= b;
+		if (instruction instanceof IF_ICMPGT) return a > b;
+		if (instruction instanceof IF_ICMPGE) return a >= b;
+
+		return null;
+	}
+
+
 	// Common helper - return the appropriate PUSH instruction for the Number type
 	private Instruction buildPush(ConstantPoolGen cpgen, Number value) {
 		InstructionList tmp = new InstructionList();
