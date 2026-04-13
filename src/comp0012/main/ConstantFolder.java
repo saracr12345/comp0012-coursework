@@ -39,6 +39,7 @@ public class ConstantFolder
 	{
 		ClassGen cgen = new ClassGen(original);
 		cgen.setMajor(50);
+		cgen.setMinor(0);
 		ConstantPoolGen cpgen = cgen.getConstantPool();
 
 		Method[] methods = cgen.getMethods(); //load all methods in the class
